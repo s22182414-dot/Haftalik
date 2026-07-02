@@ -45,7 +45,7 @@ function Navbar() {
     <nav className="navbar">
       <div className="nav-brand">
         <span className="nav-logo">
-          <img src="/image.png" alt="Logo" style={{ width: 32, height: 32, objectFit: 'contain', borderRadius: 6 }} />
+          <IconActivity />
         </span>
         <span>Maktab tizimi – Hisobotlar</span>
       </div>
