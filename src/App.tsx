@@ -63,6 +63,7 @@ type ActionStatus = { type: 'success' | 'error'; message: string } | null
 function HomePage() {
   const [loading, setLoading] = useState<string | null>(null)
   const [status, setStatus] = useState<ActionStatus>(null)
+  const API_BASE = import.meta.env.VITE_API_BASE || ''
 
   // ─── USERBOT STATES ─────────────────────────────────────────────────────────
   const [userbotStatus, setUserbotStatus] = useState<{ connected: boolean; phoneNumber?: string; apiId?: string }>({ connected: false })
@@ -83,7 +84,7 @@ function HomePage() {
   // ─── USERBOT API HANDLERS ──────────────────────────────────────────────────
   const fetchUserbotStatus = async () => {
     try {
-      const res = await fetch('/api/userbot/status')
+      const res = await fetch(`${API_BASE}/api/userbot/status`)
       const data = await res.json()
       setUserbotStatus(data)
 
@@ -96,14 +97,14 @@ function HomePage() {
           try {
             const session = JSON.parse(stored)
             console.log("[USERBOT] LocalStorage dan tiklanmoqda...")
-            const restoreRes = await fetch('/api/userbot/restore', {
+            const restoreRes = await fetch(`${API_BASE}/api/userbot/restore`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ session })
             })
             const restoreData = await restoreRes.json()
             if (restoreData.success) {
-              const updatedRes = await fetch('/api/userbot/status')
+              const updatedRes = await fetch(`${API_BASE}/api/userbot/status`)
               const updatedData = await updatedRes.json()
               setUserbotStatus(updatedData)
             } else if (restoreData.error === "AUTH_KEY_UNREGISTERED") {
@@ -131,7 +132,7 @@ function HomePage() {
     }
     setUserbotLoading(true)
     try {
-      const res = await fetch('/api/userbot/connect', {
+      const res = await fetch(`${API_BASE}/api/userbot/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiId, apiHash, phoneNumber })
@@ -158,7 +159,7 @@ function HomePage() {
     }
     setUserbotLoading(true)
     try {
-      const res = await fetch('/api/userbot/verify', {
+      const res = await fetch(`${API_BASE}/api/userbot/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: smsCode, password: twoFactorPassword })
@@ -191,7 +192,7 @@ function HomePage() {
     if (!confirm('Haqiqatan ham Telegram profilingizni uzmoqchimisiz?')) return
     setUserbotLoading(true)
     try {
-      const res = await fetch('/api/userbot/disconnect', { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/userbot/disconnect`, { method: 'POST' })
       const data = await res.json()
       if (res.ok && data.success) {
         localStorage.removeItem('userbotSession')
@@ -210,7 +211,7 @@ function HomePage() {
   const handleTozalash = async () => {
     setLoading('juma')
     try {
-      const res = await fetch('/api/tozalash', { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/tozalash`, { method: 'POST' })
       const data = await res.json() as { success?: boolean; message?: string; error?: string; missing?: Record<string, boolean> }
       if (res.ok && data.success) {
         showStatus('success', data.message || 'Muvaffaqiyatli bajarildi ✅')
@@ -234,7 +235,7 @@ function HomePage() {
   const handleShanba = async () => {
     setLoading('shanba')
     try {
-      const res = await fetch('/api/shanba', { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/shanba`, { method: 'POST' })
       const data = await res.json() as { success?: boolean; message?: string; error?: string }
       if (res.ok && data.success) {
         showStatus('success', data.message || 'Yuborildi ✅')
@@ -251,7 +252,7 @@ function HomePage() {
   const handleBarcha = async () => {
     setLoading('barcha')
     try {
-      const res = await fetch('/api/barcha', { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/barcha`, { method: 'POST' })
       const data = await res.json() as { success?: boolean; message?: string; error?: string }
       if (res.ok && data.success) {
         showStatus('success', data.message || 'Yuborildi ✅')
