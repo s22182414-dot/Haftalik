@@ -1193,6 +1193,10 @@ async function apiMiddleware(req: any, res: any) {
 
 // ─── Vite config ───────────────────────────────────────────────────────────
 export default defineConfig({
+  preview: {
+    allowedHosts: 'all',
+    cors: true,
+  },
   plugins: [
     react(),
     {
