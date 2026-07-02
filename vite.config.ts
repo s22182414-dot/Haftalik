@@ -929,10 +929,22 @@ async function handleBarcha(res: any) {
 }
 
 // ─── API Middleware ────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  'https://haftalik-beta.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:4173',
+]
+
 async function apiMiddleware(req: any, res: any) {
-  res.setHeader('Access-Control-Allow-Origin', '*')
+  const origin = req.headers['origin'] || ''
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  res.setHeader('Vary', 'Origin')
   if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return }
 
   const url = req.url || ''
@@ -1189,6 +1201,20 @@ export default defineConfig({
         server.middlewares.use('/api', apiMiddleware)
       },
       configurePreviewServer(server) {
+        // Global CORS middleware — runs before static file serving
+        server.middlewares.use((req: any, res: any, next: any) => {
+          const origin = req.headers['origin'] || ''
+          if (ALLOWED_ORIGINS.includes(origin)) {
+            res.setHeader('Access-Control-Allow-Origin', origin)
+          } else {
+            res.setHeader('Access-Control-Allow-Origin', '*')
+          }
+          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+          res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+          res.setHeader('Vary', 'Origin')
+          if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return }
+          next()
+        })
         server.middlewares.use('/api', apiMiddleware)
       }
     },
