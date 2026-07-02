@@ -512,13 +512,13 @@ async function handleBarcha(res: any) {
     const sheets = google.sheets({ version: 'v4', auth })
     const sheetsWrite = google.sheets({ version: 'v4', auth: authWrite })
 
-    // Barcha sheetlarni va ulardagi ma'lumotlarni o'qish (grid data bilan)
-    console.log("Spreadsheet ma'lumotlarini yuklash boshlanmoqda...")
-    const spreadsheetInfo = await sheets.spreadsheets.get({
+    // 1. Faqat sheet nomlarini olamiz (xotira tejash)
+    console.log("Sheet ro'yxatini yuklash boshlanmoqda...")
+    const spreadsheetMeta = await sheets.spreadsheets.get({
       spreadsheetId,
-      includeGridData: true,
+      fields: 'sheets.properties',
     })
-    const sheetList = spreadsheetInfo.data.sheets || []
+    const sheetList = spreadsheetMeta.data.sheets || []
 
     // Access token olish (authenticated PDF export uchun)
     const tokenRes = await auth.getAccessToken()
@@ -535,7 +535,15 @@ async function handleBarcha(res: any) {
     for (const sheet of visibleSheets) {
       const gid = sheet.properties?.sheetId
       const title = sheet.properties?.title || `Sheet${gid}`
-      const rows = sheet.data?.[0]?.rowData || []
+
+      // 2. Har bir sheet uchun alohida, minimal field mask bilan data olish
+      const sheetDataRes = await sheets.spreadsheets.get({
+        spreadsheetId,
+        ranges: [`'${title}'!A1:Z500`],
+        includeGridData: true,
+        fields: 'sheets.data.rowData.values(formattedValue,effectiveValue,userEnteredValue.formulaValue)',
+      })
+      const rows = sheetDataRes.data.sheets?.[0]?.data?.[0]?.rowData || []
 
       // ── 1. "O'rtacha o'zlashtirish" qatori va "Umumiy %" ustunini qidirib topish ──────
       let ortachaRowIdx = -1
@@ -807,7 +815,7 @@ async function handleBarcha(res: any) {
             }
 
             const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer())
-            const pngPages = await pdfToPng(pdfBuffer, { viewportScale: 2.2 }) // Yuqori aniqlikdagi rasm uchun 2.2
+            const pngPages = await pdfToPng(pdfBuffer, { viewportScale: 1.5 }) // Xotira tejash uchun 1.5
             if (pngPages && pngPages.length > 0) {
               // Oq chegaralarni qirqish (avto-hisobot-ai dagi Puppeteer clip kabi)
               const raw = pngPages[0].content
