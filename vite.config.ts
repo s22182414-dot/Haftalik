@@ -928,6 +928,257 @@ async function handleBarcha(res: any) {
   }
 }
 
+// ─── API Middleware ────────────────────────────────────────────────────────
+async function apiMiddleware(req: any, res: any) {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return }
+
+  const url = req.url || ''
+
+  // GET /api/env — barcha .env o'qish
+  if (url === '/env' && req.method === 'GET') {
+    sendJson(res, 200, readEnv())
+    return
+  }
+
+  // POST /api/env — bitta key saqlash
+  if (url === '/env' && req.method === 'POST') {
+    const body = JSON.parse(await readBody(req))
+    if (!body.key) { sendJson(res, 400, { error: 'Key required' }); return }
+    const env = readEnv()
+    env[body.key] = body.value
+    writeEnv(env)
+    sendJson(res, 200, { success: true })
+    return
+  }
+
+  // POST /api/tozalash — baholarni tozalash + Telegramga link yuborish
+  if (url === '/tozalash' && req.method === 'POST') {
+    await handleTozalash(res)
+    return
+  }
+
+  // POST /api/shanba — eng yuqori foizli o'quvchilarni yuborish
+  if (url === '/shanba' && req.method === 'POST') {
+    await handleShanba(res)
+    return
+  }
+
+  // POST /api/barcha — har bir sheetni PNG + caption bilan yuborish
+  if (url === '/barcha' && req.method === 'POST') {
+    await handleBarcha(res)
+    return
+  }
+
+  // GET /api/userbot/status — statusni o'qish
+  if (url === '/userbot/status' && req.method === 'GET') {
+    try {
+      const db = readDB()
+      if (db.userbotSession) {
+        sendJson(res, 200, {
+          connected: true,
+          phoneNumber: db.userbotSession.phoneNumber,
+          apiId: db.userbotSession.apiId,
+          session: db.userbotSession
+        })
+      } else {
+        sendJson(res, 200, { connected: false })
+      }
+    } catch (err: any) {
+      sendJson(res, 500, { error: err.message || String(err) })
+    }
+    return
+  }
+
+  // POST /api/userbot/connect — ulanish (tasdiqlash kodi so'rash)
+  if (url === '/userbot/connect' && req.method === 'POST') {
+    try {
+      const body = JSON.parse(await readBody(req))
+      const { apiId, apiHash, phoneNumber } = body
+      if (!apiId || !apiHash || !phoneNumber) {
+        sendJson(res, 400, { error: "API ID, API Hash va Telefon raqami majburiy." })
+        return
+      }
+
+      if (tempTelegramClient) {
+        try { await tempTelegramClient.disconnect() } catch {}
+        tempTelegramClient = null
+      }
+
+      tempApiId = parseInt(apiId)
+      tempApiHash = apiHash.trim()
+      tempPhoneNumber = phoneNumber.trim()
+
+      const session = new StringSession("")
+      tempTelegramClient = new TelegramClient(session, tempApiId, tempApiHash, {
+        connectionRetries: 5,
+      })
+
+      console.log(`[USERBOT] Telegramga ulanmoqda (${tempPhoneNumber})...`)
+      await tempTelegramClient.connect()
+
+      console.log(`[USERBOT] Tasdiqlash kodi so'ralmoqda...`)
+      const result = await tempTelegramClient.sendCode({
+        apiId: tempApiId,
+        apiHash: tempApiHash,
+      }, tempPhoneNumber)
+
+      tempPhoneCodeHash = result.phoneCodeHash
+      console.log(`[USERBOT] Tasdiqlash kodi muvaffaqiyatli so'raldi.`)
+      sendJson(res, 200, { success: true, message: "Kod yuborildi. Iltimos, Telegramingizni tekshiring." })
+    } catch (err: any) {
+      console.error(`[USERBOT] Ulanishda xato:`, err.message)
+      sendJson(res, 500, { error: err.message || String(err) })
+    }
+    return
+  }
+
+  // POST /api/userbot/verify — kodni tekshirish
+  if (url === '/userbot/verify' && req.method === 'POST') {
+    try {
+      const body = JSON.parse(await readBody(req))
+      const { code, password } = body
+      if (!code) {
+        sendJson(res, 400, { error: "Tasdiqlash kodi kiritilishi shart." })
+        return
+      }
+
+      if (!tempTelegramClient) {
+        sendJson(res, 400, { error: "Ulanish sessiyasi topilmadi. Avval kod yuboring." })
+        return
+      }
+
+      console.log(`[USERBOT] Kod tekshirilmoqda: ${code}`)
+      try {
+        await tempTelegramClient.invoke(
+          new Api.auth.SignIn({
+            phoneNumber: tempPhoneNumber,
+            phoneCodeHash: tempPhoneCodeHash,
+            phoneCode: code,
+          })
+        )
+      } catch (signInErr: any) {
+        if (signInErr.message.includes("SESSION_PASSWORD_NEEDED")) {
+          if (!password) {
+            sendJson(res, 200, { success: false, passwordRequired: true, message: "Ikki bosqichli parol (2FA) talab etiladi." })
+            return
+          }
+          console.log(`[USERBOT] 2FA parol bilan kirishga urinish...`)
+          await tempTelegramClient.signInWithPassword(
+            {
+              apiId: tempApiId,
+              apiHash: tempApiHash,
+            },
+            {
+              password: async () => password,
+              onError: (err: any) => {
+                console.error("[USERBOT] signInWithPassword error:", err.message || err)
+                throw err
+              }
+            }
+          )
+        } else {
+          throw signInErr
+        }
+      }
+
+      const sessionStr = tempTelegramClient.session.save() as string
+      const db = readDB()
+      const sessionData = {
+        apiId: tempApiId,
+        apiHash: tempApiHash,
+        phoneNumber: tempPhoneNumber,
+        sessionStr: sessionStr
+      }
+      db.userbotSession = sessionData
+      writeDB(db)
+
+      console.log(`[USERBOT] Muvaffaqiyatli ulandi!`)
+      tempTelegramClient = null
+      tempPhoneNumber = ""
+      tempPhoneCodeHash = ""
+      tempApiId = 0
+      tempApiHash = ""
+
+      sendJson(res, 200, { success: true, message: "Telegram profilingiz muvaffaqiyatli ulandi!", session: sessionData })
+    } catch (err: any) {
+      console.error(`[USERBOT] Kod tasdiqlashda xato:`, err.message)
+      sendJson(res, 500, { error: err.message || String(err) })
+    }
+    return
+  }
+
+  // POST /api/userbot/disconnect — aloqani uzish
+  if (url === '/userbot/disconnect' && req.method === 'POST') {
+    try {
+      const db = readDB()
+      if (db.userbotSession) {
+        try {
+          const session = new StringSession(db.userbotSession.sessionStr)
+          const client = new TelegramClient(session, db.userbotSession.apiId, db.userbotSession.apiHash, { connectionRetries: 1 })
+          await client.connect()
+          await client.invoke(new Api.auth.LogOut())
+        } catch (e) {}
+
+        delete db.userbotSession
+        writeDB(db)
+      }
+      sendJson(res, 200, { success: true, message: "Ulanish uzildi." })
+    } catch (err: any) {
+      sendJson(res, 500, { error: err.message || String(err) })
+    }
+    return
+  }
+
+  // POST /api/userbot/restore — sessiyani qayta yuklash
+  if (url === '/userbot/restore' && req.method === 'POST') {
+    try {
+      const body = JSON.parse(await readBody(req))
+      const { session } = body
+      if (!session) {
+        sendJson(res, 400, { error: "Sessiya yuborilmadi." })
+        return
+      }
+
+      // Validate session before storing it
+      try {
+        const client = new TelegramClient(
+          new StringSession(session.sessionStr),
+          parseInt(session.apiId),
+          session.apiHash,
+          { connectionRetries: 1 }
+        )
+        await client.connect()
+        await client.getDialogs({ limit: 1 })
+        await client.disconnect()
+      } catch (authErr: any) {
+        const errMsg = String(authErr.message || authErr)
+        if (
+          errMsg.includes("AUTH_KEY_UNREGISTERED") || 
+          errMsg.includes("USER_DEACTIVATED") || 
+          errMsg.includes("SESSION_REVOKED") || 
+          errMsg.includes("SESSION_EXPIRED")
+        ) {
+          sendJson(res, 200, { success: false, error: "AUTH_KEY_UNREGISTERED", message: "Sessiya muddati o'tgan yoki bekor qilingan." })
+          return
+        }
+      }
+
+      const db = readDB()
+      db.userbotSession = session
+      writeDB(db)
+      sendJson(res, 200, { success: true, message: "Telegram userbot ulanishi tiklandi." })
+    } catch (err: any) {
+      sendJson(res, 500, { error: err.message || String(err) })
+    }
+    return
+  }
+
+  sendJson(res, 404, { error: 'Not found' })
+}
+
 // ─── Vite config ───────────────────────────────────────────────────────────
 export default defineConfig({
   plugins: [
@@ -935,256 +1186,11 @@ export default defineConfig({
     {
       name: 'api',
       configureServer(server) {
-        server.middlewares.use('/api', async (req, res) => {
-          res.setHeader('Access-Control-Allow-Origin', '*')
-          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-          res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-          if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return }
-
-          const url = req.url || ''
-
-          // GET /api/env — barcha .env o'qish
-          if (url === '/env' && req.method === 'GET') {
-            sendJson(res, 200, readEnv())
-            return
-          }
-
-          // POST /api/env — bitta key saqlash
-          if (url === '/env' && req.method === 'POST') {
-            const body = JSON.parse(await readBody(req))
-            if (!body.key) { sendJson(res, 400, { error: 'Key required' }); return }
-            const env = readEnv()
-            env[body.key] = body.value
-            writeEnv(env)
-            sendJson(res, 200, { success: true })
-            return
-          }
-
-          // POST /api/tozalash — baholarni tozalash + Telegramga link yuborish
-          if (url === '/tozalash' && req.method === 'POST') {
-            await handleTozalash(res)
-            return
-          }
-
-          // POST /api/shanba — eng yuqori foizli o'quvchilarni yuborish
-          if (url === '/shanba' && req.method === 'POST') {
-            await handleShanba(res)
-            return
-          }
-
-          // POST /api/barcha — har bir sheetni PNG + caption bilan yuborish
-          if (url === '/barcha' && req.method === 'POST') {
-            await handleBarcha(res)
-            return
-          }
-
-          // GET /api/userbot/status — statusni o'qish
-          if (url === '/userbot/status' && req.method === 'GET') {
-            try {
-              const db = readDB()
-              if (db.userbotSession) {
-                sendJson(res, 200, {
-                  connected: true,
-                  phoneNumber: db.userbotSession.phoneNumber,
-                  apiId: db.userbotSession.apiId,
-                  session: db.userbotSession
-                })
-              } else {
-                sendJson(res, 200, { connected: false })
-              }
-            } catch (err: any) {
-              sendJson(res, 500, { error: err.message || String(err) })
-            }
-            return
-          }
-
-          // POST /api/userbot/connect — ulanish (tasdiqlash kodi so'rash)
-          if (url === '/userbot/connect' && req.method === 'POST') {
-            try {
-              const body = JSON.parse(await readBody(req))
-              const { apiId, apiHash, phoneNumber } = body
-              if (!apiId || !apiHash || !phoneNumber) {
-                sendJson(res, 400, { error: "API ID, API Hash va Telefon raqami majburiy." })
-                return
-              }
-
-              if (tempTelegramClient) {
-                try { await tempTelegramClient.disconnect() } catch {}
-                tempTelegramClient = null
-              }
-
-              tempApiId = parseInt(apiId)
-              tempApiHash = apiHash.trim()
-              tempPhoneNumber = phoneNumber.trim()
-
-              const session = new StringSession("")
-              tempTelegramClient = new TelegramClient(session, tempApiId, tempApiHash, {
-                connectionRetries: 5,
-              })
-
-              console.log(`[USERBOT] Telegramga ulanmoqda (${tempPhoneNumber})...`)
-              await tempTelegramClient.connect()
-
-              console.log(`[USERBOT] Tasdiqlash kodi so'ralmoqda...`)
-              const result = await tempTelegramClient.sendCode({
-                apiId: tempApiId,
-                apiHash: tempApiHash,
-              }, tempPhoneNumber)
-
-              tempPhoneCodeHash = result.phoneCodeHash
-              console.log(`[USERBOT] Tasdiqlash kodi muvaffaqiyatli so'raldi.`)
-              sendJson(res, 200, { success: true, message: "Kod yuborildi. Iltimos, Telegramingizni tekshiring." })
-            } catch (err: any) {
-              console.error(`[USERBOT] Ulanishda xato:`, err.message)
-              sendJson(res, 500, { error: err.message || String(err) })
-            }
-            return
-          }
-
-          // POST /api/userbot/verify — kodni tekshirish
-          if (url === '/userbot/verify' && req.method === 'POST') {
-            try {
-              const body = JSON.parse(await readBody(req))
-              const { code, password } = body
-              if (!code) {
-                sendJson(res, 400, { error: "Tasdiqlash kodi kiritilishi shart." })
-                return
-              }
-
-              if (!tempTelegramClient) {
-                sendJson(res, 400, { error: "Ulanish sessiyasi topilmadi. Avval kod yuboring." })
-                return
-              }
-
-              console.log(`[USERBOT] Kod tekshirilmoqda: ${code}`)
-              try {
-                await tempTelegramClient.invoke(
-                  new Api.auth.SignIn({
-                    phoneNumber: tempPhoneNumber,
-                    phoneCodeHash: tempPhoneCodeHash,
-                    phoneCode: code,
-                  })
-                )
-              } catch (signInErr: any) {
-                if (signInErr.message.includes("SESSION_PASSWORD_NEEDED")) {
-                  if (!password) {
-                    sendJson(res, 200, { success: false, passwordRequired: true, message: "Ikki bosqichli parol (2FA) talab etiladi." })
-                    return
-                  }
-                  console.log(`[USERBOT] 2FA parol bilan kirishga urinish...`)
-                  await tempTelegramClient.signInWithPassword(
-                    {
-                      apiId: tempApiId,
-                      apiHash: tempApiHash,
-                    },
-                    {
-                      password: async () => password,
-                      onError: (err: any) => {
-                        console.error("[USERBOT] signInWithPassword error:", err.message || err)
-                        throw err
-                      }
-                    }
-                  )
-                } else {
-                  throw signInErr
-                }
-              }
-
-              const sessionStr = tempTelegramClient.session.save() as string
-              const db = readDB()
-              const sessionData = {
-                apiId: tempApiId,
-                apiHash: tempApiHash,
-                phoneNumber: tempPhoneNumber,
-                sessionStr: sessionStr
-              }
-              db.userbotSession = sessionData
-              writeDB(db)
-
-              console.log(`[USERBOT] Muvaffaqiyatli ulandi!`)
-              tempTelegramClient = null
-              tempPhoneNumber = ""
-              tempPhoneCodeHash = ""
-              tempApiId = 0
-              tempApiHash = ""
-
-              sendJson(res, 200, { success: true, message: "Telegram profilingiz muvaffaqiyatli ulandi!", session: sessionData })
-            } catch (err: any) {
-              console.error(`[USERBOT] Kod tasdiqlashda xato:`, err.message)
-              sendJson(res, 500, { error: err.message || String(err) })
-            }
-            return
-          }
-
-          // POST /api/userbot/disconnect — aloqani uzish
-          if (url === '/userbot/disconnect' && req.method === 'POST') {
-            try {
-              const db = readDB()
-              if (db.userbotSession) {
-                try {
-                  const session = new StringSession(db.userbotSession.sessionStr)
-                  const client = new TelegramClient(session, db.userbotSession.apiId, db.userbotSession.apiHash, { connectionRetries: 1 })
-                  await client.connect()
-                  await client.invoke(new Api.auth.LogOut())
-                } catch (e) {}
-
-                delete db.userbotSession
-                writeDB(db)
-              }
-              sendJson(res, 200, { success: true, message: "Ulanish uzildi." })
-            } catch (err: any) {
-              sendJson(res, 500, { error: err.message || String(err) })
-            }
-            return
-          }
-
-          // POST /api/userbot/restore — sessiyani qayta yuklash
-          if (url === '/userbot/restore' && req.method === 'POST') {
-            try {
-              const body = JSON.parse(await readBody(req))
-              const { session } = body
-              if (!session) {
-                sendJson(res, 400, { error: "Sessiya yuborilmadi." })
-                return
-              }
-
-              // Validate session before storing it
-              try {
-                const client = new TelegramClient(
-                  new StringSession(session.sessionStr),
-                  parseInt(session.apiId),
-                  session.apiHash,
-                  { connectionRetries: 1 }
-                )
-                await client.connect()
-                await client.getDialogs({ limit: 1 })
-                await client.disconnect()
-              } catch (authErr: any) {
-                const errMsg = String(authErr.message || authErr)
-                if (
-                  errMsg.includes("AUTH_KEY_UNREGISTERED") || 
-                  errMsg.includes("USER_DEACTIVATED") || 
-                  errMsg.includes("SESSION_REVOKED") || 
-                  errMsg.includes("SESSION_EXPIRED")
-                ) {
-                  sendJson(res, 200, { success: false, error: "AUTH_KEY_UNREGISTERED", message: "Sessiya muddati o'tgan yoki bekor qilingan." })
-                  return
-                }
-              }
-
-              const db = readDB()
-              db.userbotSession = session
-              writeDB(db)
-              sendJson(res, 200, { success: true, message: "Telegram userbot ulanishi tiklandi." })
-            } catch (err: any) {
-              sendJson(res, 500, { error: err.message || String(err) })
-            }
-            return
-          }
-
-          sendJson(res, 404, { error: 'Not found' })
-        })
+        server.middlewares.use('/api', apiMiddleware)
       },
+      configurePreviewServer(server) {
+        server.middlewares.use('/api', apiMiddleware)
+      }
     },
   ],
 })
