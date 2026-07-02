@@ -181,22 +181,29 @@ async function handleTozalash(res: any) {
 
     const sheets = google.sheets({ version: 'v4', auth })
 
-    // 1. Spreadsheetni grid data bilan o'qish
-    //    includeGridData=true → har bir katakcha formula yoki qiymat ekanini bilish uchun
-    const spreadsheetInfo = await sheets.spreadsheets.get({
+    // 1. Faqat sheet nomlarini olamiz (xotira tejash)
+    const spreadsheetMeta = await sheets.spreadsheets.get({
       spreadsheetId,
-      includeGridData: true,
+      fields: 'sheets.properties',
     })
 
     const clearRanges: string[] = []
 
-    for (const sheet of spreadsheetInfo.data.sheets || []) {
+    for (const sheet of spreadsheetMeta.data.sheets || []) {
       const sheetTitle = sheet.properties?.title || ''
-      const rows = sheet.data?.[0]?.rowData || []
+      if (!sheetTitle) continue
+
+      // Har bir sheet uchun alohida, minimal field mask bilan data olish
+      const sheetDataRes = await sheets.spreadsheets.get({
+        spreadsheetId,
+        ranges: [`'${sheetTitle}'!A1:Z500`],
+        includeGridData: true,
+        fields: 'sheets.data.rowData.values(effectiveValue.numberValue,userEnteredValue.formulaValue)',
+      })
+      const rows = sheetDataRes.data.sheets?.[0]?.data?.[0]?.rowData || []
 
       // ── O'quvchi ma'lumotlari boshlanadigan qatorni topish ──────────────
       // A ustunida 1 bo'lgan birinchi qator = birinchi o'quvchi qatori
-      // Undan oldingi qatorlar = sarlavha (fan nomlari, 1-10/11-20/21-30)
       let studentStartIdx = -1
       for (let i = 0; i < rows.length; i++) {
         const cellA = rows[i]?.values?.[0]?.effectiveValue?.numberValue
@@ -221,14 +228,11 @@ async function handleTozalash(res: any) {
       const endRow = studentEndIdx + 1
 
       // ── Formula ustunlarini aniqlash ─────────────────────────────────────
-      // Birinchi o'quvchi qatoridagi D+ ustunlarni tekshiramiz:
-      // Foizi, O'rtacha, Jarima, Umumiy % = formulali → SAQLANADI
-      // Qo'lda kiritilgan baholar = formula yo'q  → TOZALANADI
       const firstStudentRow = rows[studentStartIdx]
       const formulaCols = new Set<number>()
       const maxCol = firstStudentRow?.values?.length || 0
 
-      for (let col = 3; col < maxCol; col++) { // col 3 = D (A=0, B=1, C=2)
+      for (let col = 3; col < maxCol; col++) {
         const cell = firstStudentRow?.values?.[col]
         if (cell?.userEnteredValue?.formulaValue) {
           formulaCols.add(col)
@@ -236,9 +240,6 @@ async function handleTozalash(res: any) {
       }
 
       // ── Tozalanadigan range larni qurish ─────────────────────────────────
-      // A(0)=№, B(1)=Familiya, C(2)=Ism — o'tkaziladi
-      // Formula ustunlari — o'tkaziladi
-      // Ketma-ket non-formula ustunlarni bitta range sifatida birlashtirish
       let rangeStart = -1
       for (let col = 3; col <= maxCol; col++) {
         const isFormula = formulaCols.has(col)
@@ -257,6 +258,7 @@ async function handleTozalash(res: any) {
         }
       }
     }
+
 
     // 2. Faqat baho katakchalarini tozalash
     //    Sarlavhalar (fan nomlari, 1-10/11-20/21-30) va formulalar SAQLANADI
