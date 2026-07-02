@@ -307,7 +307,7 @@ async function handleTozalash(res: any) {
   }
 }
 
-// ─── Shanba: 1 olgan o'quvchilar ──────────────────────────────────────────
+// ─── Shanba: eng yuqori foizli o'quvchilar ────────────────────────────────
 async function handleShanba(res: any) {
   const env = readEnv()
   const originalSpreadsheetUrl = (env['VITE_SPREADSHEET_ID'] || '').trim()
@@ -341,70 +341,77 @@ async function handleShanba(res: any) {
 
     const sheets = google.sheets({ version: 'v4', auth })
 
-    // Barcha sheetlarni grid data bilan o'qish
-    const spreadsheetInfo = await sheets.spreadsheets.get({
+    // 1. Faqat sheet nomlarini olamiz (includeGridData yo'q — xotira tejaydi)
+    const spreadsheetMeta = await sheets.spreadsheets.get({
       spreadsheetId,
-      includeGridData: true,
+      fields: 'sheets.properties(title,sheetId)',
     })
 
-    // Har bir sheetdan 1 baho olgan o'quvchilarni yig'ish
+    const sheetNames = (spreadsheetMeta.data.sheets || [])
+      .map(s => s.properties?.title || '')
+      .filter(Boolean)
+
     const results: string[] = []
 
-    for (const sheet of spreadsheetInfo.data.sheets || []) {
-      const sheetTitle = sheet.properties?.title || ''
-      const rows = sheet.data?.[0]?.rowData || []
+    // 2. Har bir sheetni alohida, faqat kerakli ustunlar
+    for (const sheetTitle of sheetNames) {
+      // A:Z oralig'idagi qiymatlarni o'qiymiz (formatlash yo'q)
+      const valRes = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${sheetTitle}'!A1:Z500`,
+        valueRenderOption: 'FORMATTED_VALUE',
+      })
 
-      // ── 1. O'quvchi qatorlari boshini topish ─────────────────────────────
-      // A ustunida 1 bo'lgan birinchi qator = birinchi o'quvchi
+      const rows: string[][] = (valRes.data.values || []) as string[][]
+      if (rows.length === 0) continue
+
+      // O'quvchi qatorlarini topish (A ustunida raqam bor)
       let studentStartIdx = -1
       for (let i = 0; i < rows.length; i++) {
-        if (rows[i]?.values?.[0]?.effectiveValue?.numberValue === 1) {
+        const aVal = Number(rows[i]?.[0])
+        if (!isNaN(aVal) && aVal === 1) {
           studentStartIdx = i
           break
         }
       }
       if (studentStartIdx === -1) continue
 
-      // ── 2. Header qatorlardan "Umumiy %" ustunini topish ─────────────────
+      // Header qatorlardan "Umumiy %" ustun indeksini topish
       let umumiyColIdx = -1
       for (let hRow = 0; hRow < studentStartIdx; hRow++) {
-        const headerCells = rows[hRow]?.values || []
+        const headerCells = rows[hRow] || []
         for (let col = 3; col < headerCells.length; col++) {
-          const cellText = (headerCells[col]?.formattedValue || '').toLowerCase().replace(/\s/g, '')
+          const cellText = (headerCells[col] || '').toLowerCase().replace(/\s/g, '')
           if (cellText.includes('umumiy') || cellText.includes('умумий')) {
             umumiyColIdx = col
           }
         }
       }
 
-      // Agar header da topilmasa — oxirgi ustunni ishlatamiz (fallback)
+      // Fallback: oxirgi to'liq ustun
       if (umumiyColIdx === -1) {
-        const sampleRow = rows[studentStartIdx]?.values || []
+        const sampleRow = rows[studentStartIdx] || []
         for (let col = sampleRow.length - 1; col >= 3; col--) {
-          const v = sampleRow[col]?.effectiveValue
-          if (v !== undefined && v !== null) {
+          if (sampleRow[col] !== undefined && sampleRow[col] !== '') {
             umumiyColIdx = col
             break
           }
         }
       }
 
-      // ── 3. Har bir o'quvchining Umumiy % qiymatini yig'ish ───────────────
+      // Har bir o'quvchining qiymatini yig'ish
       const studentData: { fullName: string; val: number }[] = []
-
       for (let i = studentStartIdx; i < rows.length; i++) {
-        const rowNum = rows[i]?.values?.[0]?.effectiveValue?.numberValue
-        if (typeof rowNum !== 'number' || rowNum <= 0) continue
-
-        const familiya = rows[i]?.values?.[1]?.formattedValue || ''
-        const ism = rows[i]?.values?.[2]?.formattedValue || ''
+        const rowNum = Number(rows[i]?.[0])
+        if (isNaN(rowNum) || rowNum <= 0) continue
+        const familiya = rows[i]?.[1] || ''
+        const ism = rows[i]?.[2] || ''
         const fullName = [familiya, ism].filter(Boolean).join(' ')
 
         if (umumiyColIdx !== -1) {
-          const cell = rows[i]?.values?.[umumiyColIdx]
-          const numVal = cell?.effectiveValue?.numberValue
-          // 0.1 dan past bo'lsa hisobga olmaymiz
-          if (typeof numVal === 'number' && numVal > 0.1) {
+          const rawVal = rows[i]?.[umumiyColIdx] || ''
+          const numVal = parseFloat(rawVal.toString().replace('%', '').replace(',', '.'))
+          if (!isNaN(numVal) && numVal > 0.1) {
             studentData.push({ fullName, val: numVal })
           }
         }
@@ -412,29 +419,21 @@ async function handleShanba(res: any) {
 
       if (studentData.length === 0) continue
 
-      // ── 4. Eng yuqori qiymatni topish ───────────────────────────────────
       const maxVal = Math.max(...studentData.map(s => s.val))
-
-      // Eng yuqori qiymatga ega barcha o'quvchilar (tenglar ham)
-      const found = studentData
-        .filter(s => s.val === maxVal)
-        .map(s => s.fullName)
+      const found = studentData.filter(s => s.val === maxVal).map(s => s.fullName)
 
       if (found.length > 0) {
-        // Sheet nomiga qarab emoji tanlash
         const titleLower = sheetTitle.toLowerCase()
+        const isTib = titleLower.includes('t')
         const isBlue = titleLower.includes('b') || /^\d+$/.test(sheetTitle.trim())
         const isGreen = titleLower.includes('g')
-        const isTib = titleLower.includes('t')
         const icon = isTib ? '📕' : isBlue ? '📘' : isGreen ? '📗' : '📋'
-
         results.push(`${icon} ${sheetTitle}:\n${found.map(n => `🥇 ${n}`).join('\n')}`)
       }
-
     }
 
     if (results.length === 0) {
-      sendJson(res, 200, { success: true, message: 'Birni olgan o\'quvchi topilmadi' })
+      sendJson(res, 200, { success: true, message: 'Eng yuqori foizli o\'quvchi topilmadi' })
       return
     }
 
@@ -443,10 +442,7 @@ async function handleShanba(res: any) {
     const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: groupId2,
-        text: messageText,
-      }),
+      body: JSON.stringify({ chat_id: groupId2, text: messageText }),
     })
 
     const tgData = await tgRes.json() as { ok: boolean; description?: string }
@@ -455,8 +451,7 @@ async function handleShanba(res: any) {
       return
     }
 
-    const total = results.reduce((acc, r) => acc + (r.match(/\d+\./g)?.length || 0), 0)
-    sendJson(res, 200, { success: true, message: `${total} ta o'quvchi Telegramga yuborildi ✅` })
+    sendJson(res, 200, { success: true, message: `${results.length} ta sinf natijalari Telegramga yuborildi ✅` })
   } catch (err: any) {
     console.error('Shanba error:', err)
     sendJson(res, 500, { error: err?.message || 'Noma\'lum xato' })
