@@ -11,15 +11,24 @@ const ENV_PATH = path.resolve(__dirname, '.env')
 
 // ─── Read .env ─────────────────────────────────────────────────────────────
 function readEnv(): Record<string, string> {
-  if (!fs.existsSync(ENV_PATH)) return {}
   const result: Record<string, string> = {}
-  for (const line of fs.readFileSync(ENV_PATH, 'utf-8').split('\n')) {
-    const t = line.trim()
-    if (!t || t.startsWith('#')) continue
-    const eq = t.indexOf('=')
-    if (eq === -1) continue
-    result[t.slice(0, eq).trim()] = t.slice(eq + 1).trim().replace(/^["']|["']$/g, '')
+
+  // 1. process.env dan o'qi (Render, Vercel va boshqa hosting)
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined) result[k] = v
   }
+
+  // 2. .env faylidan o'qi va ustiga yoz (lokal dev uchun)
+  if (fs.existsSync(ENV_PATH)) {
+    for (const line of fs.readFileSync(ENV_PATH, 'utf-8').split('\n')) {
+      const t = line.trim()
+      if (!t || t.startsWith('#')) continue
+      const eq = t.indexOf('=')
+      if (eq === -1) continue
+      result[t.slice(0, eq).trim()] = t.slice(eq + 1).trim().replace(/^["']|["']$/g, '')
+    }
+  }
+
   return result
 }
 
