@@ -63,7 +63,7 @@ type ActionStatus = { type: 'success' | 'error'; message: string } | null
 function HomePage() {
   const [loading, setLoading] = useState<string | null>(null)
   const [status, setStatus] = useState<ActionStatus>(null)
-  const API_BASE = import.meta.env.VITE_API_BASE || ''
+  const API_BASE = ''
 
   // ─── USERBOT STATES ─────────────────────────────────────────────────────────
   const [userbotStatus, setUserbotStatus] = useState<{ connected: boolean; phoneNumber?: string; apiId?: string }>({ connected: false })
