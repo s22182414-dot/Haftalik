@@ -1,0 +1,25 @@
+{
+  "name": "Maktab tizimi – Hisobotlar",
+  "short_name": "Hisobotlar",
+  "description": "Haftalik hisobotlarni avtomatik tahlil qilish va Telegram orqali yuborish tizimi.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0f1a",
+  "theme_color": "#7c3aed",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "education"]
+}

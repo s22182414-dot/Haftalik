@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './App.css'
 import './index.css'
 
@@ -26,6 +26,16 @@ const IconLogout = () => (
   </svg>
 )
 
+const IconDocument = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <line x1="16" y1="13" x2="8" y2="13" />
+    <line x1="16" y1="17" x2="8" y2="17" />
+    <polyline points="10 9 9 9 8 9" />
+  </svg>
+)
+
 const IconTelegram = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
@@ -35,6 +45,33 @@ const IconTelegram = () => (
 const IconCheck = () => (
   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="20 6 9 17 4 12" />
+  </svg>
+)
+
+const IconDownload = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+)
+
+const IconSmartphone = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+    <line x1="12" y1="18" x2="12.01" y2="18" />
+  </svg>
+)
+
+const IconZap = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+  </svg>
+)
+
+const IconShield = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
   </svg>
 )
 
@@ -57,7 +94,7 @@ function Navbar() {
   )
 }
 
-// ─── HOME PAGE ────────────────────────────────────────────────────────────────
+// ─── TYPES ────────────────────────────────────────────────────────────────────
 type ActionStatus = { type: 'success' | 'error'; message: string } | null
 
 function HomePage() {
@@ -266,6 +303,48 @@ function HomePage() {
     }
   }
 
+  const handleAlohida = async () => {
+    setLoading('alohida')
+    try {
+      const res = await fetch(`${API_BASE}/api/alohida`, { method: 'POST' })
+      const data = await res.json() as { success?: boolean; message?: string; error?: string }
+      if (res.ok && data.success) {
+        showStatus('success', data.message || 'Yuborildi ✅')
+      } else {
+        showStatus('error', data.error || 'Xato yuz berdi')
+      }
+    } catch {
+      showStatus('error', 'Server bilan ulanishda xato')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleFillTeachers = async () => {
+    setLoading('fill-teachers')
+    try {
+      const res = await fetch(`${API_BASE}/api/fill-teachers`, { method: 'POST' })
+      const data = await res.json() as { success?: boolean; url?: string; message?: string; error?: string }
+      if (res.ok && data.success) {
+        showStatus('success', data.message || 'Muvaffaqiyatli bajarildi ✅')
+        
+        if (data.url) {
+          let urlToOpen = data.url.trim()
+          if (!urlToOpen.startsWith('http://') && !urlToOpen.startsWith('https://')) {
+            urlToOpen = `https://docs.google.com/spreadsheets/d/${urlToOpen}/edit`
+          }
+          window.open(urlToOpen, '_blank')
+        }
+      } else {
+        showStatus('error', data.error || 'Xatolik yuz berdi')
+      }
+    } catch {
+      showStatus('error', 'Server bilan ulanishda xato')
+    } finally {
+      setLoading(null)
+    }
+  }
+
 
   return (
     <main className="main">
@@ -315,6 +394,24 @@ function HomePage() {
               <IconSend />
               {loading === 'barcha' ? 'Yuborilmoqda...' : 'Barcha sinflar (14 ta)'}
             </button>
+            <button
+              id="btn-alohida"
+              className="btn btn-purple"
+              onClick={handleAlohida}
+              disabled={loading === 'alohida'}
+            >
+              <IconSend />
+              {loading === 'alohida' ? 'Yuborilmoqda...' : 'Har bir sinfga alohida'}
+            </button>
+            <button
+              id="btn-fill-teachers"
+              className="btn btn-orange"
+              onClick={handleFillTeachers}
+              disabled={loading === 'fill-teachers'}
+            >
+              <IconDocument />
+              {loading === 'fill-teachers' ? 'To\'ldirilmoqda...' : 'O\'qituvchilarni to\'ldirish'}
+            </button>
           </div>
         </div>
 
@@ -329,8 +426,6 @@ function HomePage() {
       {/* INTEGRATIONS */}
       <p className="section-title">Integratsiyalar</p>
       <div className="cards-grid">
-
-
 
         {/* Telegram Card */}
         <div className="integration-card">
@@ -503,6 +598,64 @@ function HomePage() {
   )
 }
 
+// ─── PWA INSTALL PROMPT ──────────────────────────────────────────────────────
+function PwaInstallPrompt() {
+  const [show, setShow] = useState(false)
+  const deferredPrompt = useRef<any>(null)
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault()
+      deferredPrompt.current = e
+      setShow(true)
+    }
+    window.addEventListener('beforeinstallprompt', handler as EventListener)
+    return () => window.removeEventListener('beforeinstallprompt', handler as EventListener)
+  }, [])
+
+  const handleInstall = async () => {
+    if (!deferredPrompt.current) return
+    deferredPrompt.current.prompt()
+    const { outcome } = await deferredPrompt.current.userChoice
+    if (outcome === 'accepted') {
+      setShow(false)
+    }
+    deferredPrompt.current = null
+  }
+
+  const handleDismiss = () => {
+    setShow(false)
+  }
+
+  if (!show) return null
+
+  return (
+    <div className="pwa-overlay">
+      <div className="pwa-card">
+        <div className="pwa-icon-wrap">
+          <IconDownload />
+        </div>
+        <h2>Ilovani o'rnating</h2>
+        <p>Maktab hisobotlar tizimini telefoningizga ilova sifatida o'rnating — tezroq ochiladi va qulay bo'ladi.</p>
+        <div className="pwa-features">
+          <span className="pwa-feature-tag"><IconSmartphone /> Telefon ilova</span>
+          <span className="pwa-feature-tag"><IconZap /> Tez ochilish</span>
+          <span className="pwa-feature-tag"><IconShield /> Xavfsiz</span>
+        </div>
+        <div className="pwa-buttons">
+          <button id="btn-pwa-install" className="btn-pwa-install" onClick={handleInstall}>
+            <IconDownload />
+            O'rnatish
+          </button>
+          <button id="btn-pwa-later" className="btn-pwa-later" onClick={handleDismiss}>
+            Keyinroq
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── APP ──────────────────────────────────────────────────────────────────────
 function App() {
   return (
@@ -513,6 +666,7 @@ function App() {
         <span className="footer-text">© 2026 Maktab tizimi</span>
         <span className="footer-text">V1.1.0 Premium</span>
       </footer>
+      <PwaInstallPrompt />
     </>
   )
 }
