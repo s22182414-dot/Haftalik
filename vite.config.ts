@@ -670,9 +670,23 @@ async function handleBarcha(res: any) {
         spreadsheetId,
         ranges: [`'${title}'!A1:Z500`],
         includeGridData: true,
-        fields: 'sheets.data.rowData.values(formattedValue,effectiveValue,userEnteredValue,userEnteredFormat)',
+        fields: 'sheets.data.rowData.values(formattedValue,effectiveValue,userEnteredValue,userEnteredFormat,note)',
       })
       const rows = sheetDataRes.data.sheets?.[0]?.data?.[0]?.rowData || []
+
+      // O'quvchi qatorida izoh (note) bor-yo'qligini aniqlash uchun yordamchi
+      // Tekshiradi: 1) Google Sheets note (popup izoh), 2) katak qiymatida "izoh" so'zi
+      const rowHasNote = (rowIndex: number): boolean => {
+        const vals = rows[rowIndex]?.values || []
+        return vals.some((cell: any) => {
+          // 1. Google Sheets popup note
+          if (typeof cell?.note === 'string' && cell.note.trim() !== '') return true
+          // 2. Katak qiymatida "izoh" so'zi (katta-kichik harfdan qat'i nazar)
+          const cellText = (cell?.formattedValue || cell?.effectiveValue?.stringValue || '').toLowerCase()
+          if (cellText.includes('izoh')) return true
+          return false
+        })
+      }
 
       // ── 1. "O'rtacha o'zlashtirish" qatori va "Umumiy %" ustunini qidirib topish ──────
       let ortachaRowIdx = -1
@@ -741,7 +755,7 @@ async function handleBarcha(res: any) {
 
       const targetRange = `A1:${endColLetter}${endRow}`
 
-      const tempUpdates: { rowIndex: number; startCol: number; endCol: number; originalCells: { col: number; cellData: any }[] }[] = []
+      const tempUpdates: { rowIndex: number; startCol: number; endCol: number; saveStart: number; saveEnd: number; originalCells: { col: number; cellData: any }[] }[] = []
 
       // ── 2.5. Bahosi yo'q o'quvchilarga "Qatnashmadi" yozish ──────────────
       // O'quvchi qatorlari boshini topish (A ustunida 1 bo'lgan birinchi qator)
@@ -866,6 +880,9 @@ async function handleBarcha(res: any) {
             const studentName =
               (rows[i]?.values?.[1]?.formattedValue || rows[i]?.values?.[2]?.formattedValue || `${rowNum}-o'quvchi`).trim()
 
+            // Agar o'quvchi qatorida izoh (note) bo'lsa — ustozga xabar yubormaylik
+            const studentHasNote = rowHasNote(i)
+
             let allSubjectsEmpty = true
             for (const block of subjectBlocks) {
               if (!isBlockEmpty(i, block)) {
@@ -876,15 +893,17 @@ async function handleBarcha(res: any) {
 
             if (allSubjectsEmpty) {
               // Butunlay qatnashmagan → barcha fan bloklari uchun ustozlarga xabar
-              // Asl qiymat va formatlarni saqlash
+              // Asl qiymat va formatlarni saqlash (border uchun 1 ta katak kengaytirib saqlaymiz)
+              const saveStart = Math.max(3, subjectBlocks[0].start - 1)
+              const saveEnd = Math.min((rows[i]?.values?.length ?? colLimit) - 1, colLimit + 1)
               const origCells: { col: number; cellData: any }[] = []
-              for (let col = subjectBlocks[0].start; col <= colLimit; col++) {
+              for (let col = saveStart; col <= saveEnd; col++) {
                 const cell = rows[i]?.values?.[col]
                 origCells.push({
                   col,
                   cellData: cell ? {
-                    userEnteredValue: cell.userEnteredValue || null,
-                    userEnteredFormat: cell.userEnteredFormat || null
+                    userEnteredValue: cell.userEnteredValue ?? null,
+                    userEnteredFormat: cell.userEnteredFormat ?? null
                   } : null
                 })
               }
@@ -892,59 +911,13 @@ async function handleBarcha(res: any) {
                 rowIndex: i,
                 startCol: subjectBlocks[0].start,
                 endCol: colLimit,
+                saveStart,
+                saveEnd,
                 originalCells: origCells
               })
-              // Har bir fan uchun ustoz eslatmasi
-              for (const block of subjectBlocks) {
-                let subjectName = ''
-                for (let r = 0; r < studentStartIdx; r++) {
-                  const rowVals = rows[r]?.values || []
-                  const v = (rowVals[block.start]?.formattedValue || '').trim()
-                  if (v) { subjectName = v; break }
-                  for (let col = block.start; col <= block.end; col++) {
-                    const v2 = (rowVals[col]?.formattedValue || '').trim()
-                    if (v2) { subjectName = v2; break }
-                  }
-                  if (subjectName) break
-                }
-                if (!subjectName) subjectName = `Ustun ${block.start + 1}`
-                subjectName = cleanSubjectName(subjectName)
-                const normSubject = subjectName.toLowerCase().replace(/\s/g, '')
-                const normClass = title.toLowerCase().replace(/\s/g, '')
-                const tgId = teacherMap.get(`${normClass}_${normSubject}`) || teacherMap.get(normSubject) || defaultTeacherTg
-                if (tgId) {
-                  if (!teacherNotifications.has(tgId)) teacherNotifications.set(tgId, new Map<string, string[]>())
-                  const subMap = teacherNotifications.get(tgId)!
-                  const key = `${title} | ${subjectName}`
-                  if (!subMap.has(key)) subMap.set(key, [])
-                  subMap.get(key)!.push(studentName)
-                } else {
-                  console.warn(`[BARCHA] "${subjectName}" fani uchun ${title} sinfida ustoz Telegram topilmadi (VITE_DEFAULT_TEACHER_USERNAME ham bo'sh).`)
-                }
-              }
-            } else {
-              // Ayrim fanlarga qatnashmagan
-              for (const block of subjectBlocks) {
-                if (isBlockEmpty(i, block)) {
-                  // Asl qiymat va formatlarni saqlash
-                  const origCells: { col: number; cellData: any }[] = []
-                  for (let col = block.start; col <= block.end + 1; col++) {
-                    const cell = rows[i]?.values?.[col]
-                    origCells.push({
-                      col,
-                      cellData: cell ? {
-                        userEnteredValue: cell.userEnteredValue || null,
-                        userEnteredFormat: cell.userEnteredFormat || null
-                      } : null
-                    })
-                  }
-                  tempUpdates.push({
-                    rowIndex: i,
-                    startCol: block.start,
-                    endCol: block.end + 1,
-                    originalCells: origCells
-                  })
-                  // Bu fan uchun ustoz eslatmasi
+              // Har bir fan uchun ustoz eslatmasi (izoh bo'lsa o'tkazib yuboriladi)
+              if (!studentHasNote) {
+                for (const block of subjectBlocks) {
                   let subjectName = ''
                   for (let r = 0; r < studentStartIdx; r++) {
                     const rowVals = rows[r]?.values || []
@@ -969,6 +942,66 @@ async function handleBarcha(res: any) {
                     subMap.get(key)!.push(studentName)
                   } else {
                     console.warn(`[BARCHA] "${subjectName}" fani uchun ${title} sinfida ustoz Telegram topilmadi (VITE_DEFAULT_TEACHER_USERNAME ham bo'sh).`)
+                  }
+                }
+              } else {
+                console.log(`[BARCHA] ${studentName} (${title}) qatorida izoh bor — ustozga xabar yuborilmaydi.`)
+              }
+            } else {
+              // Ayrim fanlarga qatnashmagan
+              for (const block of subjectBlocks) {
+                if (isBlockEmpty(i, block)) {
+                  // Asl qiymat va formatlarni saqlash (border uchun 1 ta katak kengaytirib saqlaymiz)
+                  const saveStart = Math.max(3, block.start - 1)
+                  const saveEnd = Math.min((rows[i]?.values?.length ?? block.end + 2) - 1, block.end + 2)
+                  const origCells: { col: number; cellData: any }[] = []
+                  for (let col = saveStart; col <= saveEnd; col++) {
+                    const cell = rows[i]?.values?.[col]
+                    origCells.push({
+                      col,
+                      cellData: cell ? {
+                        userEnteredValue: cell.userEnteredValue ?? null,
+                        userEnteredFormat: cell.userEnteredFormat ?? null
+                      } : null
+                    })
+                  }
+                  tempUpdates.push({
+                    rowIndex: i,
+                    startCol: block.start,
+                    endCol: block.end + 1,
+                    saveStart,
+                    saveEnd,
+                    originalCells: origCells
+                  })
+                  // Bu fan uchun ustoz eslatmasi (izoh bo'lsa o'tkazib yuboriladi)
+                  if (!studentHasNote) {
+                    let subjectName = ''
+                    for (let r = 0; r < studentStartIdx; r++) {
+                      const rowVals = rows[r]?.values || []
+                      const v = (rowVals[block.start]?.formattedValue || '').trim()
+                      if (v) { subjectName = v; break }
+                      for (let col = block.start; col <= block.end; col++) {
+                        const v2 = (rowVals[col]?.formattedValue || '').trim()
+                        if (v2) { subjectName = v2; break }
+                      }
+                      if (subjectName) break
+                    }
+                    if (!subjectName) subjectName = `Ustun ${block.start + 1}`
+                    subjectName = cleanSubjectName(subjectName)
+                    const normSubject = subjectName.toLowerCase().replace(/\s/g, '')
+                    const normClass = title.toLowerCase().replace(/\s/g, '')
+                    const tgId = teacherMap.get(`${normClass}_${normSubject}`) || teacherMap.get(normSubject) || defaultTeacherTg
+                    if (tgId) {
+                      if (!teacherNotifications.has(tgId)) teacherNotifications.set(tgId, new Map<string, string[]>())
+                      const subMap = teacherNotifications.get(tgId)!
+                      const key = `${title} | ${subjectName}`
+                      if (!subMap.has(key)) subMap.set(key, [])
+                      subMap.get(key)!.push(studentName)
+                    } else {
+                      console.warn(`[BARCHA] "${subjectName}" fani uchun ${title} sinfida ustoz Telegram topilmadi (VITE_DEFAULT_TEACHER_USERNAME ham bo'sh).`)
+                    }
+                  } else {
+                    console.log(`[BARCHA] ${studentName} (${title}) qatorida izoh bor — ustozga xabar yuborilmaydi.`)
                   }
                 }
               }
@@ -1110,7 +1143,8 @@ async function handleBarcha(res: any) {
                 rows: [
                   {
                     values: u.originalCells.map(oc => {
-                      if (!oc.cellData) return {}
+                      // Bo'sh katak (null) — asl format yo'q, hech narsa o'zgartirmaymiz
+                      if (!oc.cellData) return { userEnteredValue: {}, userEnteredFormat: {} }
                       return {
                         userEnteredValue: oc.cellData.userEnteredValue || {},
                         userEnteredFormat: oc.cellData.userEnteredFormat || {}
@@ -1123,8 +1157,8 @@ async function handleBarcha(res: any) {
                   sheetId: gid,
                   startRowIndex: u.rowIndex,
                   endRowIndex: u.rowIndex + 1,
-                  startColumnIndex: u.startCol,
-                  endColumnIndex: u.endCol + 1
+                  startColumnIndex: u.saveStart,
+                  endColumnIndex: u.saveEnd + 1
                 }
               }
             }))
@@ -1442,9 +1476,23 @@ async function handleAlohida(res: any) {
         spreadsheetId,
         ranges: [`'${title}'!A1:Z500`],
         includeGridData: true,
-        fields: 'sheets.data.rowData.values(formattedValue,effectiveValue,userEnteredValue,userEnteredFormat)',
+        fields: 'sheets.data.rowData.values(formattedValue,effectiveValue,userEnteredValue,userEnteredFormat,note)',
       })
       const rows = sheetDataRes.data.sheets?.[0]?.data?.[0]?.rowData || []
+
+      // O'quvchi qatorida izoh (note) bor-yo'qligini aniqlash uchun yordamchi
+      // Tekshiradi: 1) Google Sheets note (popup izoh), 2) katak qiymatida "izoh" so'zi
+      const rowHasNote = (rowIndex: number): boolean => {
+        const vals = rows[rowIndex]?.values || []
+        return vals.some((cell: any) => {
+          // 1. Google Sheets popup note
+          if (typeof cell?.note === 'string' && cell.note.trim() !== '') return true
+          // 2. Katak qiymatida "izoh" so'zi (katta-kichik harfdan qat'i nazar)
+          const cellText = (cell?.formattedValue || cell?.effectiveValue?.stringValue || '').toLowerCase()
+          if (cellText.includes('izoh')) return true
+          return false
+        })
+      }
 
       let ortachaRowIdx = -1
       let umumiyColIdx = -1
@@ -1497,7 +1545,7 @@ async function handleAlohida(res: any) {
       }
 
       const targetRange = `A1:${endColLetter}${endRow}`
-      const tempUpdates: { rowIndex: number; startCol: number; endCol: number; originalCells: { col: number; cellData: any }[] }[] = []
+      const tempUpdates: { rowIndex: number; startCol: number; endCol: number; saveStart: number; saveEnd: number; originalCells: { col: number; cellData: any }[] }[] = []
 
       // ── "Qatnashmadi" yozish ─────────────────────────────────────────────
       let studentStartIdx = -1
@@ -1618,39 +1666,112 @@ async function handleAlohida(res: any) {
             if (typeof rowNum !== 'number' || rowNum <= 0) continue
             if (ortachaRowIdx !== -1 && i >= ortachaRowIdx) break
 
+            // O'quvchi ismini olish
+            const studentName =
+              (rows[i]?.values?.[1]?.formattedValue || rows[i]?.values?.[2]?.formattedValue || `${rowNum}-o'quvchi`).trim()
+
+            // Agar o'quvchi qatorida izoh (note) bo'lsa — ustozga xabar yubormaylik
+            const studentHasNote = rowHasNote(i)
+
             let allSubjectsEmpty = true
             for (const block of subjectBlocks) {
               if (!isBlockEmpty(i, block)) { allSubjectsEmpty = false; break }
             }
 
             if (allSubjectsEmpty) {
+              const saveStart = Math.max(3, subjectBlocks[0].start - 1)
+              const saveEnd = Math.min((rows[i]?.values?.length ?? colLimit) - 1, colLimit + 1)
               const origCells: { col: number; cellData: any }[] = []
-              for (let col = subjectBlocks[0].start; col <= colLimit; col++) {
+              for (let col = saveStart; col <= saveEnd; col++) {
                 const cell = rows[i]?.values?.[col]
                 origCells.push({
                   col,
                   cellData: cell ? {
-                    userEnteredValue: cell.userEnteredValue || null,
-                    userEnteredFormat: cell.userEnteredFormat || null
+                    userEnteredValue: cell.userEnteredValue ?? null,
+                    userEnteredFormat: cell.userEnteredFormat ?? null
                   } : null
                 })
               }
-              tempUpdates.push({ rowIndex: i, startCol: subjectBlocks[0].start, endCol: colLimit, originalCells: origCells })
+              tempUpdates.push({ rowIndex: i, startCol: subjectBlocks[0].start, endCol: colLimit, saveStart, saveEnd, originalCells: origCells })
+              // Ustozga xabar (izoh bo'lsa o'tkazib yuboriladi)
+              if (!studentHasNote) {
+                for (const block of subjectBlocks) {
+                  let subjectName = ''
+                  for (let r = 0; r < studentStartIdx; r++) {
+                    const rowVals = rows[r]?.values || []
+                    const v = (rowVals[block.start]?.formattedValue || '').trim()
+                    if (v) { subjectName = v; break }
+                    for (let col = block.start; col <= block.end; col++) {
+                      const v2 = (rowVals[col]?.formattedValue || '').trim()
+                      if (v2) { subjectName = v2; break }
+                    }
+                    if (subjectName) break
+                  }
+                  if (!subjectName) subjectName = `Ustun ${block.start + 1}`
+                  subjectName = cleanSubjectName(subjectName)
+                  const normSubject = subjectName.toLowerCase().replace(/\s/g, '')
+                  const normClass = title.toLowerCase().replace(/\s/g, '')
+                  const tgId = teacherMap.get(`${normClass}_${normSubject}`) || teacherMap.get(normSubject) || defaultTeacherTg
+                  if (tgId) {
+                    if (!teacherNotifications.has(tgId)) teacherNotifications.set(tgId, new Map<string, string[]>())
+                    const subMap = teacherNotifications.get(tgId)!
+                    const key = `${title} | ${subjectName}`
+                    if (!subMap.has(key)) subMap.set(key, [])
+                    subMap.get(key)!.push(studentName)
+                  } else {
+                    console.warn(`[ALOHIDA] "${subjectName}" fani uchun ${title} sinfida ustoz Telegram topilmadi.`)
+                  }
+                }
+              } else {
+                console.log(`[ALOHIDA] ${studentName} (${title}) qatorida izoh bor — ustozga xabar yuborilmaydi.`)
+              }
             } else {
               for (const block of subjectBlocks) {
                 if (isBlockEmpty(i, block)) {
+                  const saveStart = Math.max(3, block.start - 1)
+                  const saveEnd = Math.min((rows[i]?.values?.length ?? block.end + 2) - 1, block.end + 2)
                   const origCells: { col: number; cellData: any }[] = []
-                  for (let col = block.start; col <= block.end + 1; col++) {
+                  for (let col = saveStart; col <= saveEnd; col++) {
                     const cell = rows[i]?.values?.[col]
                     origCells.push({
                       col,
                       cellData: cell ? {
-                        userEnteredValue: cell.userEnteredValue || null,
-                        userEnteredFormat: cell.userEnteredFormat || null
+                        userEnteredValue: cell.userEnteredValue ?? null,
+                        userEnteredFormat: cell.userEnteredFormat ?? null
                       } : null
                     })
                   }
-                  tempUpdates.push({ rowIndex: i, startCol: block.start, endCol: block.end + 1, originalCells: origCells })
+                  tempUpdates.push({ rowIndex: i, startCol: block.start, endCol: block.end + 1, saveStart, saveEnd, originalCells: origCells })
+                  // Ustozga xabar (izoh bo'lsa o'tkazib yuboriladi)
+                  if (!studentHasNote) {
+                    let subjectName = ''
+                    for (let r = 0; r < studentStartIdx; r++) {
+                      const rowVals = rows[r]?.values || []
+                      const v = (rowVals[block.start]?.formattedValue || '').trim()
+                      if (v) { subjectName = v; break }
+                      for (let col = block.start; col <= block.end; col++) {
+                        const v2 = (rowVals[col]?.formattedValue || '').trim()
+                        if (v2) { subjectName = v2; break }
+                      }
+                      if (subjectName) break
+                    }
+                    if (!subjectName) subjectName = `Ustun ${block.start + 1}`
+                    subjectName = cleanSubjectName(subjectName)
+                    const normSubject = subjectName.toLowerCase().replace(/\s/g, '')
+                    const normClass = title.toLowerCase().replace(/\s/g, '')
+                    const tgId = teacherMap.get(`${normClass}_${normSubject}`) || teacherMap.get(normSubject) || defaultTeacherTg
+                    if (tgId) {
+                      if (!teacherNotifications.has(tgId)) teacherNotifications.set(tgId, new Map<string, string[]>())
+                      const subMap = teacherNotifications.get(tgId)!
+                      const key = `${title} | ${subjectName}`
+                      if (!subMap.has(key)) subMap.set(key, [])
+                      subMap.get(key)!.push(studentName)
+                    } else {
+                      console.warn(`[ALOHIDA] "${subjectName}" fani uchun ${title} sinfida ustoz Telegram topilmadi.`)
+                    }
+                  } else {
+                    console.log(`[ALOHIDA] ${studentName} (${title}) qatorida izoh bor — ustozga xabar yuborilmaydi.`)
+                  }
                 }
               }
             }
@@ -1734,7 +1855,8 @@ async function handleAlohida(res: any) {
                 rows: [
                   {
                     values: u.originalCells.map(oc => {
-                      if (!oc.cellData) return {}
+                      // Bo'sh katak — asl format yo'q edi, bo'sh format qaytaramiz
+                      if (!oc.cellData) return { userEnteredValue: {}, userEnteredFormat: {} }
                       return {
                         userEnteredValue: oc.cellData.userEnteredValue || {},
                         userEnteredFormat: oc.cellData.userEnteredFormat || {}
@@ -1747,8 +1869,8 @@ async function handleAlohida(res: any) {
                   sheetId: gid,
                   startRowIndex: u.rowIndex,
                   endRowIndex: u.rowIndex + 1,
-                  startColumnIndex: u.startCol,
-                  endColumnIndex: u.endCol + 1
+                  startColumnIndex: u.saveStart,
+                  endColumnIndex: u.saveEnd + 1
                 }
               }
             }))
@@ -1817,9 +1939,19 @@ async function handleAlohida(res: any) {
         console.log(`[ALOHIDA] O'qituvchilarga eslatma yuborish boshlanmoqda... Jami: ${teacherNotifications.size} ta o'qituvchi`)
         if (userbot && userbot.connected) {
           for (const [tgId, subMap] of teacherNotifications.entries()) {
-            let messageText = `Assalomu alaykum, hurmatli ustoz!\n\nHaftalik hisobot tizimi quyidagi sinflarda baholar to'liq emasligini aniqladi:\n\n`
-            for (const [subName, classes] of subMap.entries()) {
-              messageText += `📚 *${subName}* fani bo'yicha: ${classes.join(', ')} sinf(lar)i\n`
+            let messageText = `Assalomu alaykum, hurmatli ustoz!\n\nHaftalik hisobot tizimi quyidagi o'quvchilar uchun baholar kiritilmaganligini aniqladi:\n\n`
+            for (const [key, students] of subMap.entries()) {
+              // key = "1b | Matematika" yoki faqat "Matematika" (allStudentsEmpty holati)
+              const parts = key.split(' | ')
+              const className = parts.length >= 2 ? parts[0] : ''
+              const fanName = parts.length >= 2 ? parts[1] : key
+              const uniqueStudents = [...new Set(students)]
+              if (className) {
+                messageText += `📚 ${fanName} fani, ${className} sinfi:\n`
+              } else {
+                messageText += `📚 ${fanName} fani:\n`
+              }
+              messageText += uniqueStudents.map(s => `   • ${s}`).join('\n') + '\n\n'
             }
             messageText += `\nIltimos, Google Sheets jadvalida baholarni to'liq kiriting. Haftalik hisobot tez orada guruhlarga yuboriladi.`
 
